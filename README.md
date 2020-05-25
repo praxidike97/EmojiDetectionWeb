@@ -1,1 +1,1 @@
-# EmojiDetectionWeb
+# NanoMusicVAE
