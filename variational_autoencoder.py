@@ -1,8 +1,9 @@
 import numpy as np
+import argparse
 
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Lambda, Input, Conv2D, Flatten, Conv2DTranspose, Reshape
-from tensorflow.keras.models import Model
+from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.metrics import binary_crossentropy
 import tensorflow.keras.backend as K
 from tensorflow.keras.datasets import mnist
@@ -60,9 +61,6 @@ def vae_loss(z_mean, z_log_sigma):
 def create_vae(input_dim):
     print((batch_size, ) + tuple(img_shape.tolist()) + (1, ))
     input_layer = Input(batch_shape=(batch_size, ) + tuple(img_shape.tolist()) + (1, ))
-    #dense01 = Dense(units=256, activation='relu')(input_layer)
-    #dense02 = Dense(units=128, activation='relu')(dense01)
-    #dense03 = Dense(units=64, activation='relu')(dense02)
     conv01 = Conv2D(64, (2, 2), activation='relu', padding='same')(input_layer)
     conv02 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv01)
     conv03 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv02)
@@ -76,26 +74,78 @@ def create_vae(input_dim):
 
     lambda_layer = Lambda(sample, output_shape=(latent_dim, ))([z_mean, z_log_sigma])
 
-    dense02 = Dense(units=32, activation='relu')(lambda_layer)
-    #dense06 = Dense(units=64, activation='relu')(dense05)
-    #dense07 = Dense(units=128, activation='relu')(dense06)
-    #dense08 = Dense(units=256, activation='relu')(dense07)
-    dense03 = Dense(units=np.prod(img_shape), activation='relu')(dense02)
-    reshape = Reshape(tuple(img_shape.tolist()) + (1, ))(dense03)
+    dense02 = Dense(units=32, activation='relu')
+    dense03 = Dense(units=np.prod(img_shape), activation='relu')
+    reshape = Reshape(tuple(img_shape.tolist()) + (1, ))
+    conv04 = Conv2DTranspose(64, (3, 3), activation='relu', padding='same')
+    conv05 = Conv2DTranspose(64, (3, 3), activation='relu', padding='same')
+    conv06 = Conv2DTranspose(64, (2, 2), activation='relu', padding='same')
+    output_layer = Conv2D(1, (3, 3), activation='sigmoid', padding='same')
 
-    conv04 = Conv2DTranspose(64, (3, 3), activation='relu', padding='same')(reshape)
-    conv05 = Conv2DTranspose(64, (3, 3), activation='relu', padding='same')(conv04)
-    conv06 = Conv2DTranspose(64, (2, 2), activation='relu', padding='same')(conv05)
+    x = dense02(lambda_layer)
+    x = dense03(x)
+    x = reshape(x)
+    x = conv04(x)
+    x = conv05(x)
+    x = conv06(x)
+    output_x = output_layer(x)
 
-    output_layer = Conv2D(1, (3, 3), activation='sigmoid', padding='same')(conv06)
+    vae = Model(input_layer, output_x)
 
-    vae = Model(input_layer, output_layer)
+    input_generator = Input(batch_shape=(batch_size, latent_dim))
+    x = dense02(input_generator)
+    x = dense03(x)
+    x = reshape(x)
+    x = conv04(x)
+    x = conv05(x)
+    x = conv06(x)
+    output_x = output_layer(x)
+
+    generator = Model(input_generator, output_x)
+
     print(vae.summary())
     vae.compile(optimizer=RMSprop(), loss=vae_loss(z_mean, z_log_sigma))
-    return vae
+    generator.compile(optimizer=RMSprop(),loss='mse')
+
+    return vae, generator
 
 
 if __name__ == '__main__':
-    vae = create_vae(input_dim=X_train.shape[-1])
-    vae.fit(x=X_train, y=X_train, batch_size=batch_size, shuffle=True,
-            epochs=100, callbacks=[PlotCallback()])
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('--train', action='store_true')
+    parser.add_argument('--generate', action='store_true')
+    args = parser.parse_args()
+    args.generate = True
+
+    if args.train:
+        vae, generator = create_vae(input_dim=X_train.shape[-1])
+        vae.fit(x=X_train, y=X_train, batch_size=batch_size, shuffle=True,
+                epochs=20, callbacks=[PlotCallback()])
+        generator.save('generator.h5')
+    elif args.generate:
+        generator = load_model('generator.h5')
+        row_size = 15
+
+        v_min = -1
+        v_max = 1
+        x = np.linspace(-1, 1, row_size)
+        x = np.reshape(x, (len(x), 1))
+        y = np.linspace(-1, 1, row_size)
+        y = np.reshape(x, (len(y), 1))
+        xx, yy = np.meshgrid(x, y)
+
+        ig, axs = plt.subplots(row_size, row_size)
+        print(y_test[:10])
+        for row in range(row_size):
+            for column in range(row_size):
+
+                latent_vector = np.array([xx[row,column], yy[row,column]])
+                print(latent_vector.shape)
+                print(latent_vector)
+                latent_vector = np.repeat(latent_vector[:,np.newaxis], batch_size, axis=1).T
+                print(latent_vector.shape)
+                print(latent_vector)
+
+                prediction = generator.predict(latent_vector)
+                axs[row, column].imshow(np.squeeze(prediction[0]), cmap='gray', vmin=0., vmax=1.)
+        plt.savefig("generated_img.png")
